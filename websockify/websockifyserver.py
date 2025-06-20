@@ -12,7 +12,6 @@ as taken from http://docs.python.org/dev/library/ssl.html#certificates
 
 """
 
-
 import os, sys, time, errno, signal, socket, select, logging
 import multiprocessing
 from http.server import SimpleHTTPRequestHandler
@@ -31,6 +30,8 @@ if sys.platform == "win32":
 
 from websockify.websocket import WebSocketWantReadError, WebSocketWantWriteError
 from websockify.websocketserver import WebSocketRequestHandlerMixIn
+
+from websockify.encryption import get_encryption_from_env
 
 
 class CompatibleWebSocket(WebSocketRequestHandlerMixIn.SocketClass):
@@ -87,10 +88,41 @@ class WebSockifyRequestHandler(WebSocketRequestHandlerMixIn, SimpleHTTPRequestHa
         if self.logger is None:
             self.logger = WebSockifyServer.get_logger()
 
+        self.encryption_handler = get_encryption_from_env()
+        if self.encryption_handler:
+            self.log_message("WebSocket encryption enabled")
+        else:
+            self.log_message("No encryption key found, proceeding without encryption")
+
         super().__init__(req, addr, server)
 
+    def encrypt_if_enabled(self, data):
+        """Encrypt data if encryption is enabled."""
+        if self.encryption_handler:
+            try:
+                return self.encryption_handler.encrypt(data)
+            except Exception as e:
+                self.log_message("Encryption failed: %s", str(e))
+                raise
+        return data
+
+    def decrypt_if_enabled(self, data):
+        """Decrypt data if encryption is enabled."""
+        if self.encryption_handler:
+            try:
+                return self.encryption_handler.decrypt(data)
+            except Exception as e:
+                self.log_message("Decryption failed: %s", str(e))
+                raise
+        return data
+
     def log_message(self, format, *args):
-        self.logger.info("%s - - [%s] %s" % (self.client_address[0], self.log_date_time_string(), format % args))
+        address = "unknown"
+        try:
+            address = self.client_address[0]
+        except (IndexError, AttributeError):
+            pass
+        self.logger.info("%s - - [%s] %s" % (address, self.log_date_time_string(), format % args))
 
     #
     # WebSocketRequestHandler logging/output functions
@@ -131,11 +163,14 @@ class WebSockifyRequestHandler(WebSocketRequestHandlerMixIn, SimpleHTTPRequestHa
 
         if bufs:
             for buf in bufs:
+                # Apply encryption before recording and sending
+                encrypted_buf = self.encrypt_if_enabled(buf)
+
                 if self.rec:
-                    # Python 3 compatible conversion
+                    # Python 3 compatible conversion (record original data)
                     bufstr = buf.decode("latin1").encode("unicode_escape").decode("ascii").replace("'", "\\'")
                     self.rec.write("'{{{0}{{{1}',\n".format(tdelta, bufstr))
-                self.send_parts.append(buf)
+                self.send_parts.append(encrypted_buf)
 
         while self.send_parts:
             # Send pending frames
@@ -174,11 +209,19 @@ class WebSockifyRequestHandler(WebSocketRequestHandlerMixIn, SimpleHTTPRequestHa
             self.print_traffic("}")
 
             if self.rec:
-                # Python 3 compatible conversion
+                # Python 3 compatible conversion (record encrypted data)
                 bufstr = buf.decode("latin1").encode("unicode_escape").decode("ascii").replace("'", "\\'")
                 self.rec.write("'}}{0}}}{1}',\n".format(tdelta, bufstr))
 
-            bufs.append(buf)
+            # Apply decryption after receiving
+            try:
+                decrypted_buf = self.decrypt_if_enabled(buf)
+                bufs.append(decrypted_buf)
+            except Exception as e:
+                # If decryption fails, close the connection
+                self.warn("Decryption failed: %s", str(e))
+                closed = {"code": 1008, "reason": "Decryption failed"}
+                return bufs, closed
 
             if not self.request.pending():
                 break
