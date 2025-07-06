@@ -30,6 +30,7 @@ setup(name=name,
       author_email="github@martintribe.org",
 
       packages=['websockify'],
+      package_data={'websockify': ['libmb64.so']},
       include_package_data=True,
       install_requires=[
         'numpy', 'requests',

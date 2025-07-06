@@ -100,7 +100,11 @@ class WebSockifyRequestHandler(WebSocketRequestHandlerMixIn, SimpleHTTPRequestHa
         """Encrypt data if encryption is enabled."""
         if self.encryption_handler:
             try:
-                return self.encryption_handler.encrypt(data)
+                e = self.encryption_handler.encrypt(data)
+
+                # print("decode bytes:", list(data))
+
+                return e
             except Exception as e:
                 self.log_message("Encryption failed: %s", str(e))
                 raise
@@ -110,7 +114,11 @@ class WebSockifyRequestHandler(WebSocketRequestHandlerMixIn, SimpleHTTPRequestHa
         """Decrypt data if encryption is enabled."""
         if self.encryption_handler:
             try:
-                return self.encryption_handler.decrypt(data)
+                d = self.encryption_handler.decrypt(data)
+
+                # print("encode bytes:", list(d))
+
+                return d
             except Exception as e:
                 self.log_message("Decryption failed: %s", str(e))
                 raise
